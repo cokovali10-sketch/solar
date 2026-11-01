@@ -1,118 +1,214 @@
-# SOLAR — Token Optimization Layer for LLM Workflows
+<div align="center">
 
-SOLAR sits between you and any OpenAI-compatible LLM endpoint and makes your
-tokens go further. It compresses prompts without touching code, selects only
-the relevant project files, caches answers to repeated questions, routes each
-task to the cheapest model that can handle it, and enforces token budgets.
+# ☀️ SOLAR
 
-The honest goal: **spend fewer tokens without making the model wrong.**
+### Token Optimization Layer for LLM Workflows
 
-```
-user prompt ──► SOLAR ──► upstream LLM
-                │
-                ├── protect code/ids/paths/numbers
-                ├── compress prose
-                ├── inject relevant context (budgeted)
-                ├── semantic cache lookup
-                ├── model routing
-                └── budget check
-```
+**Spend fewer tokens. Keep the answers right.**
 
-## Status
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen)](#tests)
+[![PyPI](https://img.shields.io/badge/pypi-solar--tokens-blue?logo=pypi&logoColor=white)](https://pypi.org/project/solar-tokens/)
+[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20compatible-412991?logo=openai&logoColor=white)](#gateway)
+[![Deps](https://img.shields.io/badge/core%20deps-zero-orange)](#architecture)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-Version 0.1.0 — MVP. Core library, CLI and OpenAI-compatible gateway are
-working. 45 tests pass.
+> SOLAR sits between you and any OpenAI-compatible LLM endpoint and makes your
+> tokens go further — without making the model wrong.
 
-## Installation
+[Quick Start](#quick-start) · [Features](#features) · [Architecture](#architecture) · [Gateway](#gateway) · [Roadmap](#roadmap)
+
+</div>
+
+---
+
+## Why SOLAR?
+
+LLMs are expensive and slow, but most of what you send them is **waste**:
+
+- repeated instructions across turns
+- whole files when only 20 lines matter
+- the same question asked twice
+- a 500-token model answer to a 5-token question
+- a frontier model doing a task a small model could handle
+
+SOLAR fixes all five — and **proves it** with a built-in eval harness instead of
+promising numbers.
+
+## Features
+
+<table>
+<tr>
+<td width="50%">
+
+### 🗜️ Prompt Compression
+Removes polite filler, verbose phrases and repeated sentences. Collapses
+repeated log lines into `[xN] signature`.
+
+**Hard rule:** code, commands, identifiers, paths, numbers and quoted literals
+are *never* rewritten. Verified after compression; on failure the original is
+returned untouched.
+
+</td>
+<td width="50%">
+
+### 📂 Context Optimizer
+Ranks project files by relevance to the query, extracts the best line window
+per file, and fits everything into a token budget. Adds dependency summaries,
+git diff and a compact structure tree.
+
+No more dumping the whole repo.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🧠 Semantic Cache
+Exact hash first, then cosine similarity on a **local** hashing embedder
+(no API key, no service). Two modes:
+
+- `safe` — reuse only when the context fingerprint still matches
+- `semantic` — similarity only
+
+TTL + LRU eviction, scoped per project/model.
+
+</td>
+<td width="50%">
+
+### 🔀 Smart Model Router
+Detects task kind (simple / docs / code / debug / architecture) and picks the
+cheapest model that meets the required quality tier and fits the context window.
+User rules (`when` regex → model) take precedence.
+
+Disabled by default — enable when you have measurements.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 💰 Token Budget Manager
+Per request / session / project / day limits. Warnings at a configurable
+percentage. Forecasting and remaining-token reporting.
+
+</td>
+<td width="50%">
+
+### 📊 Metrics & Eval
+Per project / model / day aggregates: tokens, savings, cost, cache hit rate.
+Built-in eval harness (dry-run + live) with pass/fail checks and regression
+detection.
+
+</td>
+</tr>
+</table>
+
+## Quick Start
 
 ```bash
-cd D:\PortfolioProjects\SOLAR
+# install
 pip install -e .
-# optional exact tokenizer:
-pip install -e ".[exact]"
-```
+pip install -e ".[exact]"   # optional: exact tiktoken counting
 
-## Quick start
-
-```bash
-# 1. create a config
+# create config
 solar init
 
-# 2. inspect resolved config
-solar config
-
-# 3. compress a prompt from stdin
+# compress a prompt
 echo "Please could you kindly refactor load_config() ..." | solar compress --verbose
 
-# 4. build a context bundle
+# build a context bundle
 solar context "refactor load_config" --root . --json
 
-# 5. run the gateway
+# run the gateway
 solar serve
-# then point your client at http://127.0.0.1:8420/v1
+# → point your client at http://127.0.0.1:8420/v1
 ```
 
-## What it does
+## Architecture
 
-### A. Prompt compression (`solar/compress.py`)
+```mermaid
+flowchart LR
+    U[User / Client] --> G[Gateway<br/>OpenAI-compatible]
+    G --> O[Optimizer]
+    O --> C[Compressor<br/>protect + compress]
+    O --> X[Context Builder]
+    O --> K[Semantic Cache]
+    O --> R[Model Router]
+    O --> B[Budget Manager]
+    C --> P[Protect Layer<br/>code/ids/paths/nums]
+    X --> F[File Ranking<br/>+ snippets]
+    K --> S[(SQLite)]
+    B --> S
+    O --> M[Metrics]
+    M --> S
+    G --> L[Upstream LLM]
+    L --> G
+```
 
-- Removes polite filler ("please", "could you", "I would like you to", ...).
-- Replaces verbose phrases ("in order to" → "to", "due to the fact that" → "because").
-- Removes soft filler words ("just", "simply", "really", "basically", ...).
-- Deduplicates repeated sentences and paragraphs.
-- Drops conversational meta ("Hope this helps", "Let me know if...") in answers.
-- Collapses repeated log lines into `[xN] signature` form.
+### Pipeline per request
 
-**Hard rule:** code fences, inline code, identifiers, paths, URLs, numbers,
-quoted literals and shell commands are never rewritten. They are split out
-before compression and verified afterwards. If verification fails, the original
-text is returned untouched.
+```
+user prompt
+  → count original tokens
+  → build context bundle (ranked files, budgeted)
+  → compress messages (prose only, protected spans verified)
+  → cache lookup (exact → semantic)
+  → route model (cheapest that fits quality + context)
+  → budget check
+  → forward to upstream
+  → record metrics + store cache entry
+```
 
-### B. Context optimizer (`solar/context.py`)
+### Module map
 
-- Walks the project, ranks files by relevance to the query (path + content
-  overlap, changed-files bonus, test-file bonus).
-- Extracts the best line window per file, within a token budget.
-- Includes dependency summaries (public defs of imported modules).
-- Adds a compact project structure tree and the git diff.
-- Falls back to recently modified files when not a git repo.
+```
+solar/
+├── config.py      configuration (dataclasses, env + json)
+├── models.py      Message, Usage, OptimizationReport, OptimizedRequest
+├── tokens.py      token estimation (tiktoken optional, heuristic fallback)
+├── protect.py     protected-span splitter + integrity check
+├── compress.py    prose / log / response compression
+├── context.py     project context extraction
+├── storage.py     SQLite (requests, cache, sessions, kv)
+├── cache.py       semantic cache + hashing embedder
+├── budget.py      budget manager
+├── router.py      model router
+├── metrics.py     aggregation + formatting
+├── optimizer.py   orchestrates the pipeline
+├── gateway.py     OpenAI-compatible HTTP proxy (streaming)
+├── cli.py         command line
+└── evalharness.py evaluation runner
+```
 
-### C. Semantic cache (`solar/cache.py`)
+## Gateway
 
-- Exact-match hash first, then cosine similarity on a local hashing embedder
-  (no external service, no API key).
-- Two modes: `safe` (only reuse when the project context fingerprint still
-  matches and the entry is verified) and `semantic` (similarity only).
-- TTL, LRU eviction, per-project/model scoping.
+Drop-in replacement for the OpenAI API:
 
-### D. Smart model router (`solar/router.py`)
+```bash
+solar serve                     # http://127.0.0.1:8420
+export OPENAI_BASE_URL=http://127.0.0.1:8420/v1
+# use any OpenAI client unchanged
+```
 
-- Detects task kind (simple / docs / code / debug / architecture) from the
-  prompt.
-- Picks the cheapest model that meets the required quality tier and fits the
-  context window.
-- User-defined rules (`when` regex → model) take precedence.
-- Honours `SOLAR_ROUTER=1` to enable; disabled by default.
+Endpoints:
 
-### E. Token budget manager (`solar/budget.py`)
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | liveness |
+| `GET` | `/v1/models` | configured models |
+| `POST` | `/v1/chat/completions` | chat (streaming supported) |
+| `GET` | `/solar/stats` | usage summary |
+| `GET` | `/solar/requests` | recent requests |
+| `GET/POST` | `/solar/budget` | budget status / check |
+| `GET` | `/solar/cache` | cache entries |
+| `POST` | `/solar/cache/clear` | clear cache |
+| `POST` | `/solar/compress` | dry-run compress text |
+| `POST` | `/solar/context` | build context bundle |
 
-- Per request, per session, per project and per day limits.
-- Warnings at a configurable percentage (default 80%).
-- Forecasts and remaining-token reporting.
-
-### F. Metrics (`solar/metrics.py`)
-
-- Per project / model / day aggregates: tokens, savings, cost, cache hit rate.
-- CLI: `solar stats`.
-
-### G. Gateway (`solar/gateway.py`)
-
-- OpenAI-compatible: `POST /v1/chat/completions`, `GET /v1/models`.
-- Streaming passthrough (SSE) with usage capture.
-- Endpoints: `/health`, `/solar/stats`, `/solar/requests`, `/solar/cache`,
-  `/solar/budget`, `/solar/compress`, `/solar/context`, `/solar/cache/clear`.
-- Adds `X-Solar-Saved-Tokens`, `X-Solar-Savings-Pct`, `X-Solar-Cache`,
-  `X-Solar-Model` headers.
+Response headers: `X-Solar-Saved-Tokens`, `X-Solar-Savings-Pct`,
+`X-Solar-Cache`, `X-Solar-Model`.
 
 ## Configuration
 
@@ -135,8 +231,9 @@ text is returned untouched.
 ```
 
 Environment variables override file values: `SOLAR_DB`, `SOLAR_PROJECT`,
-`SOLAR_MODEL`, `SOLAR_PORT`, `SOLAR_HOST`, `OPENAI_BASE_URL`, `OLLAMA_BASE_URL`,
-`SOLAR_API_KEY`, `SOLAR_CACHE_MODE`, `SOLAR_COMPRESSION_LEVEL`, `SOLAR_ROUTER`.
+`SOLAR_MODEL`, `SOLAR_PORT`, `SOLAR_HOST`, `OPENAI_BASE_URL`,
+`OLLAMA_BASE_URL`, `SOLAR_API_KEY`, `SOLAR_CACHE_MODE`,
+`SOLAR_COMPRESSION_LEVEL`, `SOLAR_ROUTER`.
 
 ## Evaluation
 
@@ -145,7 +242,23 @@ Environment variables override file values: `SOLAR_DB`, `SOLAR_PROJECT`,
 python -m solar.evalharness --tasks tasks.json --mode dry-run
 
 # live (hits a running gateway or upstream)
-python -m solar.evalharness --tasks tasks.json --mode live --base-url http://127.0.0.1:8420/v1
+python -m solar.evalharness --tasks tasks.json --mode live \
+  --base-url http://127.0.0.1:8420/v1
+```
+
+Task format:
+
+```json
+{
+  "id": "refactor-load-config",
+  "messages": [{ "role": "user", "content": "refactor load_config() ..." }],
+  "checks": {
+    "max_tokens": 200,
+    "must_contain": ["load_config"],
+    "must_not_contain": ["invented_api"],
+    "min_savings_pct": 10.0
+  }
+}
 ```
 
 ## Tests
@@ -157,57 +270,45 @@ python -m pytest tests -q
 
 ## Honest limitations
 
-- Compression only helps on prose. Code, identifiers, paths, numbers and
-  quoted literals are never touched — that is the point, but it caps savings
-  on code-heavy prompts.
+- Compression only helps on **prose**. Code, identifiers, paths, numbers and
+  quoted literals are never touched — that caps savings on code-heavy prompts,
+  but it is the point.
 - The semantic cache uses a hashed bag-of-words embedder, not a real sentence
   model. False positives are possible on short prompts; `mode="safe"` guards
   against them by requiring a matching context fingerprint.
-- Context injection is additive: on a tiny prompt with no project, it will not
-  reduce tokens. The headline savings come from compressing verbose prompts and
+- Context injection is additive: on a tiny prompt with no project it will not
+  reduce tokens. Headline savings come from compressing verbose prompts and
   caching repeated questions.
 - No multi-tenant isolation, no GUI yet.
-- Token counts are estimates unless `tiktoken` is installed (`pip install
-  solar-tokens[exact]`); the heuristic over-estimates slightly on purpose.
+- Token counts are estimates unless `tiktoken` is installed
+  (`pip install solar-tokens[exact]`); the heuristic over-estimates slightly on
+  purpose so budget checks fail early.
 
-## Architecture
+## Roadmap
 
-```
-solar/
-  config.py      configuration (dataclasses, env + json)
-  models.py      Message, Usage, OptimizationReport, OptimizedRequest
-  tokens.py      token estimation (tiktoken optional, heuristic fallback)
-  protect.py     protected-span splitter + integrity check
-  compress.py    prose/log/response compression
-  context.py     project context extraction
-  storage.py     SQLite (requests, cache, sessions, kv)
-  cache.py       semantic cache + hashing embedder
-  budget.py      budget manager
-  router.py      model router
-  metrics.py     aggregation + formatting
-  optimizer.py   orchestrates the pipeline
-  gateway.py     OpenAI-compatible HTTP proxy
-  cli.py         command line
-  evalharness.py evaluation runner
-```
+- [ ] Response compression wired into gateway (opt-in)
+- [ ] Cached project digest (invalidate on file hash change)
+- [ ] Optional sentence-transformers embedder behind an extra
+- [ ] GUI dashboard (tokens before/after, savings, cache, budget)
+- [ ] Comparison mode: same task with/without optimization
+- [ ] Secret scanning before sending code to cloud
+- [ ] MATRIX integration: tool registry + task set + memory of fixes
+- [ ] FORGE integration via shared contract
 
-## Integration with FORGE / MATRIX
+See [`docs/PLAN.md`](docs/PLAN.md).
 
-SOLAR is designed to be the efficiency layer underneath FORGE and MATRIX:
+## Contributing
 
-- FORGE sends tasks; SOLAR optimizes the context and picks the model.
-- MATRIX provides knowledge and memory; SOLAR caches the results.
-- Qorvex provides the sandbox; MATRIX reuses it for simulation.
-
-Shared contract (planned):
-
-```
-Task { id, repo, goal, constraints, budget }
-ContextBundle { files[], diff, knowledge[], memory[] }
-ModelPolicy { model, max_tokens, fallback }
-Result { diff, tests, tokens, cost, verdict }
-```
+PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+<div align="center">
+
+Built as part of the FORGE ecosystem ·
+[Qorvex](https://github.com/cokovali10-sketch/qorvex) ·
+[MATRIX](https://github.com/cokovali10-sketch/matrix) (planned)
+
+</div>
