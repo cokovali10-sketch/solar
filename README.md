@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f172a,50:f59e0b,100:38bdf8&height=200&section=header&text=SOLAR&fontSize=72&fontColor=ffffff&fontAlignY=38&desc=Token+Optimization+Layer+for+LLM+Workflows&descSize=18&descAlignY=62&animation=fadeIn" alt="header" />
 
 # ☀️ SOLAR
 
