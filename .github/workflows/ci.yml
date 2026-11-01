@@ -30,7 +30,6 @@ jobs:
         run: |
           echo "Please refactor foo()." | python -m solar.cli compress --json
           python -m solar.cli models
-          python -m solar.cli init --path /tmp/solar.json
 
   lint:
     name: Lint
