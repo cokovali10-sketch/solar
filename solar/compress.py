@@ -310,9 +310,43 @@ def _compress_prose(text: str, settings: dict, is_assistant: bool) -> tuple[str,
             leading = line[: len(line) - len(line.lstrip())]
             trailing = line[len(line.rstrip()) :]
             stripped = line.strip()
-            if _is_protected_sentence(stripped) or _is_constraint(stripped):
+            # Whole-line dedup: drop exact duplicate lines even when they
+            # contain protected spans (the first occurrence keeps the span, so
+            # integrity still holds).
+            line_key = _normalize_key(stripped)
+            if settings["dedupe_sentences"] and len(line_key) > 15 and line_key in seen_sentences:
+                dropped += 1
+                continue
+
+            if _is_protected_sentence(stripped):
                 new_lines.append(line)
-                seen_sentences.add(_normalize_key(stripped))
+                seen_sentences.add(line_key)
+                continue
+
+            if _is_constraint(stripped):
+                # Constraint sentences are never dropped and never have filler
+                # words stripped (that could weaken a requirement), but polite
+                # frames and verbose phrases are still safe to compress.
+                # Sentence-level dedup still applies.
+                light_settings = dict(settings)
+                light_settings["soft_filler"] = False
+                light_settings["very"] = False
+                light_settings["dedupe_sentences"] = False
+                sentences = _SENTENCE_SPLIT.split(stripped)
+                kept: list[str] = []
+                for sentence in sentences:
+                    s_key = _normalize_key(sentence)
+                    if settings["dedupe_sentences"] and len(s_key) > 15 and s_key in seen_sentences:
+                        dropped += 1
+                        continue
+                    seen_sentences.add(s_key)
+                    updated = _compress_sentence(sentence, light_settings)
+                    kept.append(updated if updated else sentence)
+                rebuilt = " ".join(kept).strip()
+                if rebuilt:
+                    new_lines.append(leading + rebuilt + trailing)
+                else:
+                    new_lines.append(line)
                 continue
 
             sentences = _SENTENCE_SPLIT.split(stripped)
@@ -321,7 +355,7 @@ def _compress_prose(text: str, settings: dict, is_assistant: bool) -> tuple[str,
                 normalized = _normalize_key(sentence)
                 if (
                     settings["dedupe_sentences"]
-                    and len(normalized) > 40
+                    and len(normalized) > 15
                     and normalized in seen_sentences
                 ):
                     dropped += 1
@@ -489,10 +523,12 @@ def compress_text(
         0.0 if original_tokens == 0 else 100.0 * (original_tokens - compressed_tokens) / original_tokens
     )
 
-    if accepted != text and savings_pct < config.min_savings_pct:
+    if accepted != text and savings_pct < config.min_savings_pct and log_note is None:
         notes.append(f"savings {savings_pct:.1f}% below threshold; original kept")
         accepted = text
         compressed_tokens = original_tokens
+    elif accepted != text and savings_pct < config.min_savings_pct and log_note is not None:
+        notes.append(f"prose savings below threshold, but log compression kept ({savings_pct:.1f}%)")
 
     return CompressionResult(
         original=text,
